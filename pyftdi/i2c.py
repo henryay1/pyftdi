@@ -353,10 +353,10 @@ class I2cController:
     HIGH = 0xff
     BIT0 = 0x01
     IDLE = HIGH
-    SCL_BIT = 0x01  #AD0
-    SDA_O_BIT = 0x02  #AD1
-    SDA_I_BIT = 0x04  #AD2
-    SCL_FB_BIT = 0x80  #AD7
+    SCL_BIT = 0x01  # AD0
+    SDA_O_BIT = 0x02  # AD1
+    SDA_I_BIT = 0x04  # AD2
+    SCL_FB_BIT = 0x80  # AD7
     PAYLOAD_MAX_LENGTH = 0xFF00  # 16 bits max (- spare for control)
     HIGHEST_I2C_ADDRESS = 0x7F
     DEFAULT_BUS_FREQUENCY = 100000.0
@@ -1029,9 +1029,9 @@ class I2cController:
         cmd.extend(self._write_byte)
         cmd.append(i2caddress)
         try:
-            self._send_check_ack(cmd)
+            self._send_check_ack(cmd, is_do_prolog_cmd=True)
         except I2cNackError:
-            self.log.warning('NACK @ 0x%02x', (i2caddress>>1))
+            self.log.warning('NACK @ 0x%02x', (i2caddress >> 1))
             raise
 
     def _do_epilog(self) -> None:
@@ -1041,15 +1041,27 @@ class I2cController:
         # be sure to purge the MPSSE reply
         self._ftdi.read_data_bytes(1, 1)
 
-    def _send_check_ack(self, cmd: bytearray):
+    def _send_check_ack(self, cmd: bytearray, is_do_prolog_cmd: bool):
         # note: cmd is modified
         if self._fake_tristate:
+            # if it is a _do_prolog command, then check to see if the next
+            # action after ACK is a read by looking at the last bit of cmd
+            # which is the read/write bit. Write=0, Read=1
+            end_as_input = False
+            if is_do_prolog_cmd:
+                if cmd[-1:][0] & 0x1:
+                    # if reading after ACK, we want to end as an input later
+                    end_as_input = True
             # SCL low, SDA high-Z (input)
             cmd.extend(self._clk_lo_data_input)
             # read SDA (ack from slave)
             cmd.extend(self._read_bit)
-            # leave SCL low, restore SDA as output
-            cmd.extend(self._clk_lo_data_hi)
+            # if writing after ACK, end as an output. if reading after, end
+            # as an input to prevent a short as some slaves may pull SDA low
+            # after ACK
+            if not end_as_input:
+                # leave SCL low, restore SDA as output
+                cmd.extend(self._clk_lo_data_hi)
         else:
             # SCL low, SDA high-Z
             cmd.extend(self._clk_lo_data_hi)
@@ -1152,4 +1164,4 @@ class I2cController:
         for byte in out:
             cmd = bytearray(self._write_byte)
             cmd.append(byte)
-            self._send_check_ack(cmd)
+            self._send_check_ack(cmd, is_do_prolog_cmd=False)
